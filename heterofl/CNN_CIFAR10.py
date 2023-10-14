@@ -117,13 +117,13 @@ def federated_learning(clients, clients_per_round, total_epochs, local_epochs):
             clients_model_parameters_collections[client['type']].append(client_model.named_parameters()) #  names_parameters() returns (name, val)
             clients_type_counts_collections[client['type']] += 1
 
-        # Server aggregates
+        # Server aggregates and average
+        clients_parameters_weight_collections = {key: value / clients_per_round for key, value in clients_type_counts_collections.items()}
         for client_type, named_parameters_list in clients_model_parameters_collections.items():
             for named_parameters in named_parameters_list:
                 for name, val in named_parameters:
                     val = zeropad_to_size(val, aggregated_params[name].size())
-                    aggregated_params[name].add_(val)
-        #  TODO: average
+                    aggregated_params[name].add_(val * clients_parameters_weight_collections[client_type])
 
 
         # Load the aggregated parameters into the global model

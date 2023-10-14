@@ -112,14 +112,14 @@ def federated_learning(clients, clients_per_round, total_epochs, local_epochs):
             clients_model_parameters_collections[client['type']].append(client_model.named_parameters()) #  names_parameters() returns (name, val)
             clients_type_counts_collections[client['type']] += 1
 
-        # Server aggregates
+
+        # Server aggregates and average
+        clients_parameters_weight_collections = {key: value / clients_per_round for key, value in clients_type_counts_collections.items()}
         for client_type, named_parameters_list in clients_model_parameters_collections.items():
             for named_parameters in named_parameters_list:
                 for name, val in named_parameters:
                     val = zeropad_to_size(val, aggregated_params[name].size())
-                    aggregated_params[name].add_(val)
-        #  TODO: average
-
+                    aggregated_params[name].add_(val * clients_parameters_weight_collections[client_type])
 
         # Load the aggregated parameters into the global model
         global_model.load_state_dict(aggregated_params)
@@ -132,7 +132,7 @@ def federated_learning(clients, clients_per_round, total_epochs, local_epochs):
 num_clients = 5  # 客户端总数
 clients_per_round = 4  # 每轮训练客户端比例
 local_epochs = 5  # 本地迭代次数
-total_epochs = 2  # 总迭代次数
+total_epochs = 5  # 总迭代次数
 
 transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.1307,), (0.3081,))])
 train_set = datasets.MNIST(root="../data", train=True, download=False, transform=transform)  # len == 60000
