@@ -6,8 +6,8 @@ import torch.nn.functional as F
 from torchvision import datasets, transforms
 from torch.utils.data import DataLoader, random_split
 
-def zeropad_to_size(small_tenosor, big_tennsor_size):
-    diff = np.array(big_tennsor_size) - np.array(small_tenosor.size())
+def zeropad_to_size(small_tensor, big_tensor_size):
+    diff = np.array(big_tensor_size) - np.array(small_tensor.size())
     #  if 'diff' is: np.array([20,10,0,0])
     #  then pad is: (0,0,0,0,0,10,0,20)
     pad = []
@@ -19,7 +19,7 @@ def zeropad_to_size(small_tenosor, big_tennsor_size):
             pad.append(0)
             pad.append(x)
     pad = tuple(pad)
-    return F.pad(small_tenosor, pad, 'constant', 0)
+    return F.pad(small_tensor, pad, 'constant', 0)
 
 
 def cut_to_size(big_tensor, small_tensor_size):
