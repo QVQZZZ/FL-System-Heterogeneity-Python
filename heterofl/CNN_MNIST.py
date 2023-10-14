@@ -42,7 +42,7 @@ class SimpleCNN(nn.Module):
         super(SimpleCNN, self).__init__()
         self.conv1 = nn.Conv2d(in_channels=1, out_channels=int(6 * width_factor), kernel_size=(5, 5))
         self.conv2 = nn.Conv2d(in_channels=int(6 * width_factor), out_channels=int(16 * width_factor), kernel_size=(5, 5))
-        self.fc1 = nn.Linear(int(16 * width_factor * 4 * 4), int(120 * width_factor))
+        self.fc1 = nn.Linear(int(16 * width_factor * 4 * 4), int(120 * width_factor)) #
         self.fc2 = nn.Linear(int(120 * width_factor), int(84 * width_factor))
         self.fc3 = nn.Linear(int(84 * width_factor), 10)
 
