@@ -1,3 +1,4 @@
+# In[import and tool]
 import random
 import numpy as np
 import torch
@@ -37,6 +38,7 @@ def cut_to_size(big_tensor, small_tensor_size):
     pad = tuple(pad)
     return F.pad(big_tensor, pad, 'constant', 0)
 
+# In[net]
 class SimpleCNN(nn.Module):
     def __init__(self, num_classes=10, width_factor=1.0):
         super(SimpleCNN, self).__init__()
@@ -67,7 +69,7 @@ class SimpleCNN(nn.Module):
             num_features *= s
         return num_features
 
-
+# In[federated learning: heteroFL]
 def create_client_model(client_type, num_classes=10):
     if client_type == 'weak':
         return SimpleCNN(num_classes, width_factor=0.25)
@@ -117,6 +119,7 @@ def federated_learning(clients, clients_per_round, total_epochs, local_epochs):
             clients_model_parameters_collections[client['type']].append(client_model.named_parameters()) #  names_parameters() returns (name, val)
             clients_type_counts_collections[client['type']] += 1
 
+
         # Server aggregates and average
         clients_parameters_weight_collections = {key: value / clients_per_round for key, value in clients_type_counts_collections.items()}
         for client_type, named_parameters_list in clients_model_parameters_collections.items():
@@ -124,7 +127,6 @@ def federated_learning(clients, clients_per_round, total_epochs, local_epochs):
                 for name, val in named_parameters:
                     val = zeropad_to_size(val, aggregated_params[name].size())
                     aggregated_params[name].add_(val * clients_parameters_weight_collections[client_type])
-
 
         # Load the aggregated parameters into the global model
         global_model.load_state_dict(aggregated_params)
@@ -134,9 +136,10 @@ def federated_learning(clients, clients_per_round, total_epochs, local_epochs):
     return global_model
 
 
+# In[train and test: heteroFL]
 num_clients = 5  # 客户端总数
-clients_per_round = 4  # 每轮训练客户端比例
-local_epochs = 5  # 本地迭代次数
+clients_per_round = 2  # 每轮训练客户端比例
+local_epochs = 2  # 本地迭代次数
 total_epochs = 2  # 总迭代次数
 
 transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
@@ -171,3 +174,29 @@ test_data_loader = torch.utils.data.DataLoader(test_set, batch_size=64, shuffle=
 # 测试 final_global_model
 accuracy = test_model(final_global_model.to('cuda'), test_data_loader)
 print(f'Accuracy on the test set: {accuracy:.2f}%')
+
+# In[test: AllSmall]
+# 为了照顾weak客户端统一采用最小模型，按理说应该改create_client_model，这里为了方便直接将所有客户端设置为weak，效果是一样的
+clients_all_small = [{'type': 'weak', 'data': client_data[i]} for i in range(num_clients)]
+final_global_model_all_small = federated_learning(clients_all_small, clients_per_round, total_epochs, local_epochs)
+accuracy_all_small = test_model(final_global_model_all_small.to('cuda'), test_data_loader)
+print(f'Accuracy on the test set (AllSmall): {accuracy_all_small:.2f}%')
+
+# In[test: Exclusive]
+# 为了采用统一的最大模型，过滤掉非strong的客户端
+clients_exclusive = [x for x in clients if x['type'] == 'strong']
+final_global_model_exclusive = federated_learning(clients_exclusive, clients_per_round, total_epochs, local_epochs)
+accuracy_exclusive = test_model(final_global_model_exclusive.to('cuda'), test_data_loader)
+print(f'Accuracy on the test set (Exclusive): {accuracy_exclusive:.2f}%')
+
+# In[test: Ideal]
+# 理想情况，所有客户端都是strong的
+clients_ideal = [{'type': 'strong', 'data': client_data[i]} for i in range(num_clients)]
+final_global_model_ideal = federated_learning(clients_ideal, clients_per_round, total_epochs, local_epochs)
+accuracy_ideal = test_model(final_global_model_ideal.to('cuda'), test_data_loader)
+print(f'Accuracy on the test set (Ideal): {accuracy_ideal:.2f}%')
+      
+# In[修改]
+# 将 MNIST 换成 CIFAR10 只需要修改
+#    - 神经网络（网络的类）
+#    - 数据集加载（trainset 和 testset）

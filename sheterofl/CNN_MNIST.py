@@ -88,40 +88,56 @@ def federated_learning(clients, clients_per_round, total_epochs, local_epochs):
         clients_type_counts_collections = {'weak': 0, 'medium': 0, 'strong': 0}
         aggregated_params = {param_name: torch.zeros_like(param) for param_name, param in global_model.named_parameters()}
 
+        client_models = []  # [('strong',NN), ('medium',NN), ...]
         for client in selected_clients:
-            client_model = create_client_model(client['type']).to('cuda')  # Create client-specific width model
-            #  Client get model from server
-            global_model_dict = global_model.state_dict()
-            client_model_dict = client_model.state_dict()
-            for name, param in client_model_dict.items():
-                if name in global_model_dict.keys():
-                    client_model_dict[name] = cut_to_size(global_model_dict[name], client_model_dict[name].size())
-            client_model.load_state_dict(client_model_dict)
+            #  TODO: SHETEROFL
+            # Create client-specific width model
+            if client['type'] == 'strong':
+                client_models.append(('strong', create_client_model('strong').to('cuda')))
+                client_models.append(('medium', create_client_model('medium').to('cuda')))
+                client_models.append(('weak', create_client_model('weak').to('cuda')))
+            elif client['type'] == 'medium':
+                client_models.append(('medium', create_client_model('medium').to('cuda')))
+                client_models.append(('weak', create_client_model('weak').to('cuda')))
+            else:  # weak
+                client_models.append(('weak', create_client_model('weak').to('cuda')))
 
-            client_data_loader = torch.utils.data.DataLoader(client['data'], batch_size=64, shuffle=True)
-            optimizer = torch.optim.Adam(client_model.parameters())
-            criterion = torch.nn.CrossEntropyLoss()
+            for type, client_model in client_models:
+                #  Client get model parameters from server
+                global_model_dict = global_model.state_dict()
+                client_model_dict = client_model.state_dict()
+                for name, param in client_model_dict.items():
+                    if name in global_model_dict.keys():
+                        client_model_dict[name] = cut_to_size(global_model_dict[name], client_model_dict[name].size())
+                client_model.load_state_dict(client_model_dict)
 
-            for local_epoch in range(local_epochs):
-                for batch_data, batch_labels in client_data_loader:
-                    batch_data, batch_labels = batch_data.to('cuda'), batch_labels.to('cuda')
-                    optimizer.zero_grad()
-                    predictions = client_model(batch_data)
-                    loss = criterion(predictions, batch_labels)
-                    loss.backward()
-                    optimizer.step()
+                client_data_loader = torch.utils.data.DataLoader(client['data'], batch_size=64, shuffle=True)
+                optimizer = torch.optim.Adam(client_model.parameters())
+                criterion = torch.nn.CrossEntropyLoss()
 
-            clients_model_parameters_collections[client['type']].append(client_model.named_parameters()) #  names_parameters() returns (name, val)
-            clients_type_counts_collections[client['type']] += 1
+                for local_epoch in range(local_epochs):
+                    for batch_data, batch_labels in client_data_loader:
+                        batch_data, batch_labels = batch_data.to('cuda'), batch_labels.to('cuda')
+                        optimizer.zero_grad()
+                        predictions = client_model(batch_data)
+                        loss = criterion(predictions, batch_labels)
+                        loss.backward()
+                        optimizer.step()
 
+                #  在SHETEROFL下，客户端可以有多个model，因此以下的变量可以理解为model的type
+                #  例如，原本是强客户端、弱客户端的统计，现在可以理解为强模型、弱模型的统计，也因此上面client_models会附带字符串作为元组
+                #  原本需要将变量改名，但是太麻烦了
+                #  确实可以写的很优雅，就是让model和client['type']一样加上一个type属性，但是我懒，就这样用if语句得了
+                clients_model_parameters_collections[type].append(client_model.named_parameters()) #  names_parameters() returns (name, val)
+                clients_type_counts_collections[type] += 1
 
-        # Server aggregates and average
-        clients_parameters_weight_collections = {key: value / clients_per_round for key, value in clients_type_counts_collections.items()}
-        for client_type, named_parameters_list in clients_model_parameters_collections.items():
-            for named_parameters in named_parameters_list:
-                for name, val in named_parameters:
-                    val = zeropad_to_size(val, aggregated_params[name].size())
-                    aggregated_params[name].add_(val * clients_parameters_weight_collections[client_type])
+                # Server aggregates and average
+                clients_parameters_weight_collections = {key: value / clients_per_round for key, value in clients_type_counts_collections.items()}
+                for client_type, named_parameters_list in clients_model_parameters_collections.items():
+                    for named_parameters in named_parameters_list:
+                        for name, val in named_parameters:
+                            val = zeropad_to_size(val, aggregated_params[name].size())
+                            aggregated_params[name].add_(val * clients_parameters_weight_collections[client_type])
 
         # Load the aggregated parameters into the global model
         global_model.load_state_dict(aggregated_params)
