@@ -42,20 +42,15 @@ def cut_to_size(big_tensor, small_tensor_size):
 class SimpleCNN(nn.Module):
     def __init__(self, num_classes=10, width_factor=1.0):
         super(SimpleCNN, self).__init__()
-        self.conv1 = nn.Conv2d(in_channels=3, out_channels=int(64 * width_factor), kernel_size=(3, 3), padding=1)
-        self.conv2 = nn.Conv2d(in_channels=int(64 * width_factor), out_channels=int(128 * width_factor), kernel_size=(3, 3), padding=1)
-        self.conv3 = nn.Conv2d(in_channels=int(128 * width_factor), out_channels=int(128 * width_factor), kernel_size=(3, 3), padding=1)
-        self.fc1 = nn.Linear(int(128 * width_factor * 4 * 4), int(512 * width_factor))
-        self.fc2 = nn.Linear(int(512 * width_factor), int(256 * width_factor))
-        self.fc3 = nn.Linear(int(256 * width_factor), num_classes)
+        self.conv1 = nn.Conv2d(in_channels=1, out_channels=int(6 * width_factor), kernel_size=(5, 5))
+        self.conv2 = nn.Conv2d(in_channels=int(6 * width_factor), out_channels=int(16 * width_factor), kernel_size=(5, 5))
+        self.fc1 = nn.Linear(int(16 * width_factor * 4 * 4), int(120 * width_factor)) #
+        self.fc2 = nn.Linear(int(120 * width_factor), int(84 * width_factor))
+        self.fc3 = nn.Linear(int(84 * width_factor), num_classes)
 
     def forward(self, x):
-        x = F.relu(self.conv1(x))
-        x = F.max_pool2d(x, (2, 2))
-        x = F.relu(self.conv2(x))
-        x = F.max_pool2d(x, (2, 2))
-        x = F.relu(self.conv3(x))
-        x = F.max_pool2d(x, (2, 2))
+        x = F.max_pool2d(F.relu(self.conv1(x)), (2, 2))
+        x = F.max_pool2d(F.relu(self.conv2(x)), (2, 2))
         x = x.view(-1, self.num_flat_features(x))
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
@@ -93,10 +88,11 @@ def federated_learning(clients, clients_per_round, total_epochs, local_epochs):
         clients_type_counts_collections = {'weak': 0, 'medium': 0, 'strong': 0}
         aggregated_params = {param_name: torch.zeros_like(param) for param_name, param in global_model.named_parameters()}
 
-        client_models = []  # [('strong',NN), ('medium',NN), ...]
+
         for client in selected_clients:
             # TODO: SHETEROFL
             # Create client-specific width model
+            client_models = []  # [('strong',NN), ('medium',NN), ...]
             if client['type'] == 'strong':
                 client_models.append(('strong', create_client_model('strong').to('cuda')))
                 client_models.append(('medium', create_client_model('medium').to('cuda')))
@@ -154,13 +150,13 @@ def federated_learning(clients, clients_per_round, total_epochs, local_epochs):
 
 # In[train and test: heteroFL]
 num_clients = 5  # 客户端总数
-clients_per_round = 2  # 每轮训练客户端比例
-local_epochs = 2  # 本地迭代次数
-total_epochs = 2  # 总迭代次数
+clients_per_round = 5  # 每轮训练客户端比例
+local_epochs = 4  # 本地迭代次数
+total_epochs = 4  # 总迭代次数
 
-transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
-train_set = datasets.CIFAR10(root="../data", train=True, download=True, transform=transform)
-test_set = datasets.CIFAR10(root="../data", train=False, download=True, transform=transform)
+transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.1307,), (0.3081,))])
+train_set = datasets.MNIST(root="../data", train=True, download=False, transform=transform)  # len == 60000
+test_set = datasets.MNIST(root="../data", train=False, download=False, transform=transform)  # len == 10000
 
 # 划分客户端数据
 client_data = random_split(train_set, [len(train_set) // num_clients] * num_clients)
@@ -190,24 +186,3 @@ test_data_loader = torch.utils.data.DataLoader(test_set, batch_size=64, shuffle=
 # 测试 final_global_model
 accuracy = test_model(final_global_model.to('cuda'), test_data_loader)
 print(f'Accuracy on the test set: {accuracy:.2f}%')
-
-# In[test: AllSmall]
-# 为了照顾weak客户端统一采用最小模型，按理说应该改create_client_model，这里为了方便直接将所有客户端设置为weak，效果是一样的
-clients_all_small = [{'type': 'weak', 'data': client_data[i]} for i in range(num_clients)]
-final_global_model_all_small = federated_learning(clients_all_small, clients_per_round, total_epochs, local_epochs)
-accuracy_all_small = test_model(final_global_model_all_small.to('cuda'), test_data_loader)
-print(f'Accuracy on the test set (AllSmall): {accuracy_all_small:.2f}%')
-
-# In[test: Exclusive]
-# 为了采用统一的最大模型，过滤掉非strong的客户端
-clients_exclusive = [x for x in clients if x['type'] == 'strong']
-final_global_model_exclusive = federated_learning(clients_exclusive, clients_per_round, total_epochs, local_epochs)
-accuracy_exclusive = test_model(final_global_model_exclusive.to('cuda'), test_data_loader)
-print(f'Accuracy on the test set (Exclusive): {accuracy_exclusive:.2f}%')
-
-# In[test: Ideal]
-# 理想情况，所有客户端都是strong的
-clients_ideal = [{'type': 'strong', 'data': client_data[i]} for i in range(num_clients)]
-final_global_model_ideal = federated_learning(clients_ideal, clients_per_round, total_epochs, local_epochs)
-accuracy_ideal = test_model(final_global_model_ideal.to('cuda'), test_data_loader)
-print(f'Accuracy on the test set (Ideal): {accuracy_ideal:.2f}%')

@@ -116,6 +116,7 @@ def federated_learning(clients, clients_per_round, total_epochs, local_epochs):
 
 
         # Server aggregates and average
+        # TODO 此处有 BUG
         clients_parameters_weight_collections = {key: value / clients_per_round for key, value in clients_type_counts_collections.items()}
         for client_type, named_parameters_list in clients_model_parameters_collections.items():
             for named_parameters in named_parameters_list:
