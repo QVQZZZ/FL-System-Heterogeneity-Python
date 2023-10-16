@@ -137,10 +137,10 @@ def federated_learning(clients, clients_per_round, total_epochs, local_epochs):
 
 
 # In[train and test: heteroFL]
-num_clients = 5  # 客户端总数
-clients_per_round = 2  # 每轮训练客户端比例
+num_clients = 20  # 客户端总数
+clients_per_round = 5  # 每轮训练客户端比例
 local_epochs = 2  # 本地迭代次数
-total_epochs = 2  # 总迭代次数
+total_epochs = 10  # 总迭代次数
 
 transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
 train_set = datasets.CIFAR10(root="../data", train=True, download=True, transform=transform)
