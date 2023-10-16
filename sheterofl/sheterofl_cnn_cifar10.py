@@ -160,8 +160,8 @@ local_epochs = 4  # 本地迭代次数
 total_epochs = 4  # 总迭代次数
 
 transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
-train_set = datasets.CIFAR10(root="../data", train=True, download=False, transform=transform)
-test_set = datasets.CIFAR10(root="../data", train=False, download=False, transform=transform)
+train_set = datasets.CIFAR10(root="../data", train=True, download=True, transform=transform)
+test_set = datasets.CIFAR10(root="../data", train=False, download=True, transform=transform)
 
 # 划分客户端数据
 client_data = random_split(train_set, [len(train_set) // num_clients] * num_clients)

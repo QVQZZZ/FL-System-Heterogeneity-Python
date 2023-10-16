@@ -139,8 +139,8 @@ local_epochs = 2  # 本地迭代次数
 total_epochs = 2  # 总迭代次数
 
 transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.1307,), (0.3081,))])
-train_set = datasets.MNIST(root="../data", train=True, download=False, transform=transform)  # len == 60000
-test_set = datasets.MNIST(root="../data", train=False, download=False, transform=transform)  # len == 10000
+train_set = datasets.MNIST(root="../data", train=True, download=True, transform=transform)  # len == 60000
+test_set = datasets.MNIST(root="../data", train=False, download=True, transform=transform)  # len == 10000
 
 # 划分客户端数据
 client_data = random_split(train_set, [len(train_set) // num_clients] * num_clients)
