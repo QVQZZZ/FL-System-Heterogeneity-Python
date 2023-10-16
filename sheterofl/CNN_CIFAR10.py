@@ -42,15 +42,20 @@ def cut_to_size(big_tensor, small_tensor_size):
 class SimpleCNN(nn.Module):
     def __init__(self, num_classes=10, width_factor=1.0):
         super(SimpleCNN, self).__init__()
-        self.conv1 = nn.Conv2d(in_channels=1, out_channels=int(6 * width_factor), kernel_size=(5, 5))
-        self.conv2 = nn.Conv2d(in_channels=int(6 * width_factor), out_channels=int(16 * width_factor), kernel_size=(5, 5))
-        self.fc1 = nn.Linear(int(16 * width_factor * 4 * 4), int(120 * width_factor)) #
-        self.fc2 = nn.Linear(int(120 * width_factor), int(84 * width_factor))
-        self.fc3 = nn.Linear(int(84 * width_factor), num_classes)
+        self.conv1 = nn.Conv2d(in_channels=3, out_channels=int(64 * width_factor), kernel_size=(3, 3), padding=1)
+        self.conv2 = nn.Conv2d(in_channels=int(64 * width_factor), out_channels=int(128 * width_factor), kernel_size=(3, 3), padding=1)
+        self.conv3 = nn.Conv2d(in_channels=int(128 * width_factor), out_channels=int(128 * width_factor), kernel_size=(3, 3), padding=1)
+        self.fc1 = nn.Linear(int(128 * width_factor * 4 * 4), int(512 * width_factor))
+        self.fc2 = nn.Linear(int(512 * width_factor), int(256 * width_factor))
+        self.fc3 = nn.Linear(int(256 * width_factor), num_classes)
 
     def forward(self, x):
-        x = F.max_pool2d(F.relu(self.conv1(x)), (2, 2))
-        x = F.max_pool2d(F.relu(self.conv2(x)), (2, 2))
+        x = F.relu(self.conv1(x))
+        x = F.max_pool2d(x, (2, 2))
+        x = F.relu(self.conv2(x))
+        x = F.max_pool2d(x, (2, 2))
+        x = F.relu(self.conv3(x))
+        x = F.max_pool2d(x, (2, 2))
         x = x.view(-1, self.num_flat_features(x))
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
@@ -153,9 +158,9 @@ clients_per_round = 2  # 每轮训练客户端比例
 local_epochs = 2  # 本地迭代次数
 total_epochs = 2  # 总迭代次数
 
-transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.1307,), (0.3081,))])
-train_set = datasets.MNIST(root="../data", train=True, download=False, transform=transform)  # len == 60000
-test_set = datasets.MNIST(root="../data", train=False, download=False, transform=transform)  # len == 10000
+transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
+train_set = datasets.CIFAR10(root="../data", train=True, download=True, transform=transform)
+test_set = datasets.CIFAR10(root="../data", train=False, download=True, transform=transform)
 
 # 划分客户端数据
 client_data = random_split(train_set, [len(train_set) // num_clients] * num_clients)
