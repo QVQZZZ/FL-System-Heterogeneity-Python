@@ -18,15 +18,20 @@ class Factor:
 class SimpleCNN(nn.Module):
     def __init__(self, num_classes=10, width_factor=1.0):
         super(SimpleCNN, self).__init__()
-        self.conv1 = nn.Conv2d(in_channels=1, out_channels=int(6 * width_factor), kernel_size=(5, 5))
-        self.conv2 = nn.Conv2d(in_channels=int(6 * width_factor), out_channels=int(16 * width_factor), kernel_size=(5, 5))
-        self.fc1 = nn.Linear(int(16 * width_factor * 4 * 4), int(120 * width_factor))
-        self.fc2 = nn.Linear(int(120 * width_factor), int(84 * width_factor))
-        self.fc3 = nn.Linear(int(84 * width_factor), num_classes)
+        self.conv1 = nn.Conv2d(in_channels=3, out_channels=int(64 * width_factor), kernel_size=(3, 3), padding=1)
+        self.conv2 = nn.Conv2d(in_channels=int(64 * width_factor), out_channels=int(128 * width_factor), kernel_size=(3, 3), padding=1)
+        self.conv3 = nn.Conv2d(in_channels=int(128 * width_factor), out_channels=int(128 * width_factor), kernel_size=(3, 3), padding=1)
+        self.fc1 = nn.Linear(int(128 * width_factor * 4 * 4), int(512 * width_factor))
+        self.fc2 = nn.Linear(int(512 * width_factor), int(256 * width_factor))
+        self.fc3 = nn.Linear(int(256 * width_factor), num_classes)
 
     def forward(self, x):
-        x = F.max_pool2d(F.relu(self.conv1(x)), (2, 2))
-        x = F.max_pool2d(F.relu(self.conv2(x)), (2, 2))
+        x = F.relu(self.conv1(x))
+        x = F.max_pool2d(x, (2, 2))
+        x = F.relu(self.conv2(x))
+        x = F.max_pool2d(x, (2, 2))
+        x = F.relu(self.conv3(x))
+        x = F.max_pool2d(x, (2, 2))
         x = x.view(-1, self.num_flat_features(x))
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
@@ -46,7 +51,7 @@ class Client:
     def __init__(self, width_factor, data):
         self.width_factor = width_factor
         self.data = data
-        
+
     def __str__(self):
         return f"Model(width_factor={self.width_factor}, data_len={len(self.data)})"
 
@@ -58,10 +63,11 @@ class Model:
         width_factor:模型的尺寸
         parameters:真正的模型,是一个nn.Module实现类的实例
     """
+
     def __init__(self, width_factor, parameters):
         self.width_factor = width_factor
         self.parameters = parameters
-    
+
     def __str__(self):
         return f"Model(width_factor={self.width_factor}, parameters={self.parameters})"
 
@@ -238,9 +244,9 @@ def test_model(model, test_loader):
 
 if __name__ == '__main__':
     # prepare dataset
-    transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.1307,), (0.3081,))])
-    train_set = datasets.MNIST(root="../data", train=True, download=True, transform=transform)  # len == 60000
-    test_set = datasets.MNIST(root="../data", train=False, download=True, transform=transform)  # len == 10000
+    transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
+    train_set = datasets.CIFAR10(root="../data", train=True, download=True, transform=transform)  # len == 60000
+    test_set = datasets.CIFAR10(root="../data", train=False, download=True, transform=transform)  # len == 10000
 
     # split data into different clients (iid)
     # num_clients = 10
@@ -251,7 +257,7 @@ if __name__ == '__main__':
     # split data into different clients (non-iid)
     num_clients = 10
     client_width_factors = np.random.choice(Factor.width_factors, num_clients)
-    client_idcs = dirichlet_split_noniid(train_set.targets, alpha=1, n_clients=num_clients)
+    client_idcs = dirichlet_split_noniid(np.array(train_set.targets), alpha=1, n_clients=num_clients)
     clients = []
     for client_idx in range(num_clients):
         client_indices = client_idcs[client_idx]
@@ -261,7 +267,8 @@ if __name__ == '__main__':
 
     # starting federated learning
     selected_rate = 0.5
-    final_global_model = heterofl(clients=clients, clients_per_round=int(selected_rate*num_clients), total_epochs=5, local_epochs=3).parameters
+    final_global_model = heterofl(clients=clients, clients_per_round=int(selected_rate * num_clients), total_epochs=5,
+                                  local_epochs=3).parameters
 
     # 创建测试数据加载器
     test_data_loader = torch.utils.data.DataLoader(test_set, batch_size=64, shuffle=False)
