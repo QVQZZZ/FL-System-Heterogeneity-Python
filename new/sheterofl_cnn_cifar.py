@@ -3,6 +3,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.optim.lr_scheduler import ExponentialLR
 from torchvision import datasets, transforms
 from torch.utils.data import DataLoader, random_split
 from tool import cut_to_size, zeropad_to_size, dirichlet_split_noniid
@@ -91,9 +92,6 @@ def random_choice(clients, clients_per_round):
     :param clients_per_round: 每轮通信选取的客户端数量
     :return: Client类组成的列表
     """
-    # random.shuffle(clients)
-    # selected_clients = clients[:clients_per_round]
-    # return selected_clients
     while True:
         random.shuffle(clients)
         selected_clients = clients[:clients_per_round]
@@ -104,13 +102,18 @@ def random_choice(clients, clients_per_round):
 
 def create_client_model(width_factor):
     """
-    HETEROFL: 根据客户端宽度创建一个客户端特定的模型
+    SHETEROFL: 根据客户端宽度创建多个客户端特定的模型
     :param width_factor: 客户端宽度
     :return: 一个客户端特定的模型
     """
-    parameters = SimpleCNN(num_classes=10, width_factor=width_factor).cuda()
-    client_model = Model(width_factor=width_factor, parameters=parameters)
-    return client_model
+    width_factors = np.array(Factor.width_factors)
+    width_factors = width_factors[width_factors <= width_factor]
+    client_models = []
+    for width_factor in width_factors:
+        parameters = SimpleCNN(num_classes=10, width_factor=width_factor).cuda()
+        client_model = Model(width_factor=width_factor, parameters=parameters)
+        client_models.append(client_model)
+    return client_models
 
 
 def get_parameters_from_server(client_model, global_model):
@@ -198,29 +201,30 @@ def aggregate(received_models):
     return Model(width_factor=1.0, parameters=global_model)
 
 
-def heterofl(clients, clients_per_round, total_epochs, local_epochs):
+def sheterofl(clients, clients_per_round, total_epochs, local_epochs):
     global_model = init_global_model()
     for total_epoch in range(total_epochs):
         clients_selected = random_choice(clients, clients_per_round)
         received_models = []
         for client in clients_selected:
-            client_model = create_client_model(client.width_factor)
-            client_model = get_parameters_from_server(client_model, global_model)
-            # backward start
-            client_data_loader = torch.utils.data.DataLoader(client.data, batch_size=64, shuffle=True)
-            optimizer = torch.optim.Adam(client_model.parameters.parameters(), lr=0.001)
-            criterion = torch.nn.CrossEntropyLoss()
-            for local_epoch in range(local_epochs):
-                for batch_data, batch_labels in client_data_loader:
-                    client_model.parameters.train()  # train mode
-                    batch_data, batch_labels = batch_data.to('cuda'), batch_labels.to('cuda')
-                    optimizer.zero_grad()
-                    predictions = client_model.parameters(batch_data)
-                    loss = criterion(predictions, batch_labels)
-                    loss.backward()
-                    optimizer.step()
-            # backward end
-            received_models.append(client_model)
+            client_models = create_client_model(client.width_factor)
+            for client_model in client_models:
+                client_model = get_parameters_from_server(client_model, global_model)
+                # backward start
+                client_data_loader = torch.utils.data.DataLoader(client.data, batch_size=64, shuffle=True)
+                optimizer = torch.optim.Adam(client_model.parameters.parameters(), lr=0.001)
+                criterion = torch.nn.CrossEntropyLoss()
+                for local_epoch in range(local_epochs):
+                    for batch_data, batch_labels in client_data_loader:
+                        client_model.parameters.train()  # train mode
+                        batch_data, batch_labels = batch_data.to('cuda'), batch_labels.to('cuda')
+                        optimizer.zero_grad()
+                        predictions = client_model.parameters(batch_data)
+                        loss = criterion(predictions, batch_labels)
+                        loss.backward()
+                        optimizer.step()
+                # backward end
+                received_models.append(client_model)
         global_model = aggregate(received_models)
         print(f"Epoch {total_epoch + 1}/{total_epochs} completed")
 
@@ -247,7 +251,7 @@ def test_model(model, test_loader):
 
 if __name__ == '__main__':
     # prepare dataset
-    transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
+    transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.1307,), (0.3081,))])
     train_set = datasets.CIFAR10(root="../data", train=True, download=True, transform=transform)  # len == 60000
     test_set = datasets.CIFAR10(root="../data", train=False, download=True, transform=transform)  # len == 10000
 
@@ -268,13 +272,10 @@ if __name__ == '__main__':
         width_factor = client_width_factors[client_idx]
         clients.append(Client(width_factor=width_factor, data=client_data))
 
-    # clients = [client for client in clients if client.width_factor == 1]
-    # print(len(clients))
-
     # starting federated learning
     selected_rate = 0.1
-    final_global_model = heterofl(clients=clients, clients_per_round=int(selected_rate * num_clients), total_epochs=100,
-                                  local_epochs=3).parameters
+    final_global_model = sheterofl(clients=clients, clients_per_round=int(selected_rate * num_clients), total_epochs=100,
+                                   local_epochs=3).parameters
 
     # 创建测试数据加载器
     test_data_loader = torch.utils.data.DataLoader(test_set, batch_size=64, shuffle=False)
