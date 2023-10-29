@@ -44,6 +44,7 @@ def random_choice(clients, clients_per_round, difference=True):
     :return: Client类组成的列表
     """
     if difference:
+        # 若为True,则保证选出的客户端包含所有宽度的客户端
         while True:
             random.shuffle(clients)
             selected_clients = clients[:clients_per_round]
@@ -51,9 +52,13 @@ def random_choice(clients, clients_per_round, difference=True):
             if len(clients_type) == len(Factor.width_factors):
                 return selected_clients
     else:
-        random.shuffle(clients)
-        selected_clients = clients[:clients_per_round]
-        return selected_clients
+        # 若为False,也至少要保证选出的客户端中包含一个宽度为1的客户端,避免聚合时出现大量的0
+        while True:
+            random.shuffle(clients)
+            selected_clients = clients[:clients_per_round]
+            for selected_client in selected_clients:
+                if selected_client.width_factor == 1:
+                    return selected_clients
 
 
 def get_parameters_from_server(client_model, global_model):
@@ -77,6 +82,10 @@ def aggregate(received_models):
     聚合模型得到一个全局模型
     :param received_models: 多个客户端模型组成的列表
     :return: 聚合后的全局模型
+
+    :undone:如果缺少宽度为1的客户端,那么可能出现参数大量为0,因此在random_choice函数中保证了必须出现宽度为1的客户端
+    :undone: 建议新增一个功能,在出现这种情况时让aggregate保留上一轮通信的参数,但是这种方式不适合用函数了,因为给aggregate添加一个全局模型作为参数很不优雅
+    :undone: 后续写其他实验时可以考虑用Server类,将aggregate设计为一个方法,将全局模型设置为属性,这样就能很方便地添加这个功能了
     """
     # zero init global_model(aggregated_model)
     model_class = type(received_models[0].parameters)
@@ -178,17 +187,30 @@ def heterofl(clients, clients_per_round, total_epochs, local_epochs, difference=
     return global_model
 
 
-# In[1]
+# In[1]ideal_iid
 if __name__ == '__main__':
     torch.manual_seed(42); random.seed(42); np.random.seed(42)
     cfg = {"num_clients": 100,
            "selected_rate": 0.1,
            "total_epoch": 30,
-           "local_epoch": 3,
-           # 是否保证每轮联邦选出的客户端包含所有width_factors,一般选择True,如果你在测试Exclusive,test_small_control等
-           # 可能造成缺少某种客户端的情况,那么需要将difference改为False
+           "local_epoch": 1,
+           # difference用于控制每轮通信选择的客户端的种类:
+           #    若clients变量包含所有种类的客户端,则应该选为True,保证每轮通信都能选择所有种类的客户端:
+           #        因此需要确保clients变量包含所有宽度的客户端,即:
+           #        difference为True: iid, dirichlet, test_small_exp
+           #    若clients变量不包含所有种类的客户端,则应该选为False,让每轮通信中都随机选择客户端,但应至少包含一个宽度为1的客户端确保聚合不出现0:
+           #        因此需要确保clients变量包含宽度为1的客户端,但可以不包含其他种类的客户端,即:
+           #        difference为False: ideal_iid, ideal_dirichlet, exclusive_iid, exclusive_dirichlet, test_small_control
            "difference": False,
-           # 可选为iid, dirichlet, test_small_exp, test_small_control
+           # split_method控制数据的拆分方法以及客户端的选择:
+           #    iid: 将数据随机(iid)分到客户端中,用heterofl处理
+           #    dirichlet: 将数据按狄利克雷分布(noniid)分到客户端中,用heterofl处理
+           #    ideal_iid: 将数据随机(iid)分到客户端中,客户端种类为全1客户端,用heterofl处理但等价于FedAvg
+           #    ideal_dirichlet: 将数据按狄利克雷分布(noniid)分到客户端中,客户端种类为全1客户端,用heterofl处理但等价于FedAvg
+           #    exclusive_iid: 将数据随机(iid)分到客户端中,随后只保留1客户端,用heterofl处理但等价于FedAvg
+           #    exclusive_dirichlet: 将数据按狄利克雷分布(noniid)分到客户端中,用heterofl处理但等价于FedAvg
+           #    test_small_exp: 将数据0-2类分到小客户端,其余分到大客户端,都采用狄利克雷分布(noniid),用heterofl处理
+           #    test_small_control: 将数据0-2类分到小客户端,其余分到大客户端,都采用狄利克雷分布(noniid),随后剔除小客户端,用heterofl处理
            "split_method": "test_small_control",
            }
 
@@ -208,6 +230,30 @@ if __name__ == '__main__':
         client_index = dirichlet_split_noniid(np.array(train_set.targets), alpha=1, n_clients=num_clients)
         client_data = [Subset(train_set, indices) for indices in client_index]
         clients = [Client(width_factor=width_factor, data=data) for width_factor, data in zip(client_width_factors, client_data)]
+    elif cfg["split_method"] == "ideal_iid":
+        # 所有客户端都是强客户端, 重新定义client_width_factors为全1客户端
+        client_width_factors = np.random.choice([1], num_clients)
+        client_data = random_split(train_set, [len(train_set) // num_clients] * num_clients)
+        clients = [Client(width_factor=width_factor, data=data) for width_factor, data in zip(client_width_factors, client_data)]
+    elif cfg["split_method"] == "ideal_dirichlet":
+        # 所有客户端都是强客户端, 重新定义client_width_factors为全1客户端
+        client_width_factors = np.random.choice([1], num_clients)
+        client_index = dirichlet_split_noniid(np.array(train_set.targets), alpha=1, n_clients=num_clients)
+        client_data = [Subset(train_set, indices) for indices in client_index]
+        clients = [Client(width_factor=width_factor, data=data) for width_factor, data in zip(client_width_factors, client_data)]
+    elif cfg["split_method"] == "exclusive_iid":
+        # split data into different clients (iid)
+        # 随后只保留最大的客户端
+        client_data = random_split(train_set, [len(train_set) // num_clients] * num_clients)
+        clients = [Client(width_factor=width_factor, data=data) for width_factor, data in zip(client_width_factors, client_data)]
+        clients = [_ for _ in clients if _.width_factor == max(Factor.width_factors)]
+    elif cfg["split_method"] == "exclusive_dirichlet":
+        # split data into different clients (dirichlet noniid)
+        # 随后只保留最大的客户端
+        client_index = dirichlet_split_noniid(np.array(train_set.targets), alpha=1, n_clients=num_clients)
+        client_data = [Subset(train_set, indices) for indices in client_index]
+        clients = [Client(width_factor=width_factor, data=data) for width_factor, data in zip(client_width_factors, client_data)]
+        clients = [_ for _ in clients if _.width_factor == max(Factor.width_factors)]
     elif cfg["split_method"] == "test_small_exp":
         # split data into different clients (test small model)
         # 将0,1,2的样本dirichlet划分到小客户端上, 将剩余的样本dirichlet划分到其他客户端上
