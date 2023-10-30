@@ -22,20 +22,26 @@ def init_global_model():
     return global_model
 
 
-def create_client_model(width_factor):
+def create_client_model(width_factor, multiple=False):
     """
-    fjord: 根据客户端宽度创建多个客户端特定的模型
+    根据客户端宽度创建一个客户端特定的模型
     :param width_factor: 客户端宽度
-    :return: 一个客户端特定的模型
+    :param multiple: 若为True则会返回多个宽度小于客户端宽度的模型组成的列表
+    :return: 一个客户端特定的模型,或一个模型的列表
     """
-    width_factors = np.array(Factor.width_factors)
-    width_factors = width_factors[width_factors <= width_factor]
-    client_models = []
-    for width_factor in width_factors:
+    if not multiple:
         parameters = SimpleCNN(num_classes=10, width_factor=width_factor).cuda()
         client_model = Model(width_factor=width_factor, parameters=parameters)
-        client_models.append(client_model)
-    return client_models
+        return client_model
+    else:
+        width_factors = np.array(Factor.width_factors)
+        width_factors = width_factors[width_factors <= width_factor]
+        client_models = []
+        for width_factor in width_factors:
+            parameters = SimpleCNN(num_classes=10, width_factor=width_factor).cuda()
+            client_model = Model(width_factor=width_factor, parameters=parameters)
+            client_models.append(client_model)
+        return client_models
 
 
 def random_choice(clients, clients_per_round, difference=True):
@@ -165,7 +171,7 @@ def fjord(clients, clients_per_round, total_epochs, local_epochs, difference=Tru
         clients_selected = random_choice(clients, clients_per_round, difference=difference)
         received_models = []
         for client in clients_selected:
-            client_models = create_client_model(client.width_factor)
+            client_models = create_client_model(client.width_factor, multiple=True)
             teacher_model = max(client_models, key=lambda model: model.width_factor)
             student_models = [model for model in client_models if model != teacher_model]
 
@@ -215,10 +221,10 @@ def fjord(clients, clients_per_round, total_epochs, local_epochs, difference=Tru
 
 if __name__ == '__main__':
     torch.manual_seed(42); random.seed(42); np.random.seed(42)
-    cfg = {"dataset": "mnist",
+    cfg = {"dataset": "cifar10",
            "num_clients": 100,
            "selected_rate": 0.1,
-           "total_epoch": 30,
+           "total_epoch": 150,
            "local_epoch": 1,
            # difference用于控制每轮通信选择的客户端的种类:
            #    若clients变量包含所有种类的客户端,则应该选为True,保证每轮通信都能选择所有种类的客户端:
@@ -231,7 +237,7 @@ if __name__ == '__main__':
            # split_method控制数据的拆分方法以及客户端的选择:
            #    iid: 将数据随机(iid)分到客户端中,用heterofl处理
            #    dirichlet: 将数据按狄利克雷分布(noniid)分到客户端中,用heterofl处理
-           "split_method": "iid",
+           "split_method": "dirichlet",
            }
 
     # prepare Net and dataset
@@ -263,10 +269,17 @@ if __name__ == '__main__':
     # starting federated learning
     selected_rate, total_epoch, local_epoch, difference = cfg["selected_rate"], cfg["total_epoch"], cfg["local_epoch"], cfg["difference"]
     final_global_model = fjord(clients=clients, clients_per_round=int(selected_rate*num_clients),
-                               total_epochs=total_epoch, local_epochs=local_epoch, difference=difference).parameters
+                               total_epochs=total_epoch, local_epochs=local_epoch, difference=difference)
 
     # test final_global_model
     test_data_loader = torch.utils.data.DataLoader(test_set, batch_size=64, shuffle=False)
-    accuracy = test_model(final_global_model.to('cuda'), test_data_loader)
+    accuracy = test_model(final_global_model.parameters.to('cuda'), test_data_loader)
     print('Training completed')
     print(f'Accuracy on the test set: {accuracy:.2f}%')
+
+    # test sub_models
+    sub_models = [create_client_model(width_factor) for width_factor in Factor.width_factors]
+    sub_models = [get_parameters_from_server(sub_model, final_global_model) for sub_model in sub_models]
+    accuracies = [test_model(sub_model.parameters.to('cuda'), test_data_loader) for sub_model in sub_models]
+    for idx, sub_model in enumerate(sub_models):
+        print(f'Accuracy for sub_model with width_factor {sub_model.width_factor}: {accuracies[idx]:.2f}%')

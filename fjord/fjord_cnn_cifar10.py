@@ -64,6 +64,7 @@ class SimpleCNN(nn.Module):
             num_features *= s
         return num_features
 
+
 # In[federated learning: heteroFL]
 def create_client_model(client_type, num_classes=10):
     if client_type == 'weak':
@@ -180,6 +181,7 @@ def federated_learning(clients, clients_per_round, total_epochs, local_epochs):
         print(f"Epoch {epoch + 1}/{total_epochs} completed")
 
     return global_model
+
 
 # In[train and test: heteroFL]
 num_clients = 20  # 客户端总数
