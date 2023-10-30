@@ -118,7 +118,7 @@ def federated_learning(clients, clients_per_round, total_epochs, local_epochs):
                 client_models[i][1] = model
 
             client_data_loader = torch.utils.data.DataLoader(client['data'], batch_size=64, shuffle=True)
-            teacher_model = client_models[0][1]  # 对于strong客户端，0就是strong模型
+            teacher_model = client_models[0][1] # 对于strong客户端，0就是strong模型
             student_models = [_[1] for _ in client_models[1:]]  # 后续的模型就是学生网络
             all_types = [_[0] for _ in client_models]
             optimizer_teacher = torch.optim.Adam(teacher_model.parameters(), lr=0.001)
