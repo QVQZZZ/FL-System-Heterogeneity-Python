@@ -195,7 +195,8 @@ def fjord(clients, clients_per_round, total_epochs, local_epochs, difference=Tru
                 student_model = get_parameters_from_server(student_model, global_model)
                 client_data_loader = torch.utils.data.DataLoader(client.data, batch_size=64, shuffle=True)
                 optimizer = torch.optim.Adam(student_model.parameters.parameters(), lr=0.001)
-                criterion = nn.KLDivLoss(reduction = 'batchmean')
+                kd_criterion = nn.KLDivLoss(reduction='batchmean')
+                student_criterion = nn.CrossEntropyLoss()
                 for local_epoch in range(local_epochs):
                     for batch_data, batch_labels in client_data_loader:
                         student_model.parameters.train()
@@ -204,9 +205,12 @@ def fjord(clients, clients_per_round, total_epochs, local_epochs, difference=Tru
                         with torch.no_grad():
                             predictions_teacher = teacher_model.parameters(batch_data)
                         predictions_student = student_model.parameters(batch_data)
-                        temperature = 1
-                        loss = criterion(torch.softmax(predictions_teacher / temperature, dim=1),
-                                         torch.softmax(predictions_student / temperature, dim=1))
+                        student_loss = student_criterion(predictions_student, batch_labels)
+                        temperature = 1; alpha = 0.5
+                        kd_loss = kd_criterion(torch.log_softmax(predictions_student / temperature, dim=1),
+                                               torch.softmax(predictions_teacher / temperature, dim=1))
+                        print(kd_loss)
+                        loss = (1 - alpha) * student_loss + alpha * kd_loss
                         loss.backward()
                         optimizer.step()
                 received_models.append(student_model)
@@ -221,10 +225,10 @@ def fjord(clients, clients_per_round, total_epochs, local_epochs, difference=Tru
 
 if __name__ == '__main__':
     torch.manual_seed(42); random.seed(42); np.random.seed(42)
-    cfg = {"dataset": "cifar10",
+    cfg = {"dataset": "mnist",
            "num_clients": 100,
            "selected_rate": 0.1,
-           "total_epoch": 150,
+           "total_epoch": 50,
            "local_epoch": 1,
            # difference用于控制每轮通信选择的客户端的种类:
            #    若clients变量包含所有种类的客户端,则应该选为True,保证每轮通信都能选择所有种类的客户端:
@@ -237,7 +241,7 @@ if __name__ == '__main__':
            # split_method控制数据的拆分方法以及客户端的选择:
            #    iid: 将数据随机(iid)分到客户端中,用heterofl处理
            #    dirichlet: 将数据按狄利克雷分布(noniid)分到客户端中,用heterofl处理
-           "split_method": "dirichlet",
+           "split_method": "iid",
            }
 
     # prepare Net and dataset

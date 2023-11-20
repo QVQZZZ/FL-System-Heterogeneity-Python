@@ -11,4 +11,4 @@ class Client:
         self.data = data
 
     def __str__(self):
-        return f"Model(width_factor={self.width_factor}, data_len={len(self.data)})"
+        return f"Client(width_factor={self.width_factor}, data_len={len(self.data)})"
