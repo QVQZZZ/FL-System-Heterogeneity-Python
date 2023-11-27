@@ -149,11 +149,11 @@ def get_parameters_from_server(client_model, global_model):
     return client_model
 
 
-def aggregate(received_models: List[Model], last_global_model: Model, server_data: List[Subset], kd_epochs) -> Model:
+def aggregate(received_models: List[Model], global_model: Model, server_data: List[Subset], kd_epochs) -> Model:
     """
     根据所有接收到的模型，统一蒸馏为p=1的模型，然后做fedavg
     :param received_models: 接收到的所有模型组成的列表 (many teachers)
-    :param last_global_model: 上一轮的服务器模型 (one student)
+    :param global_model: 上一轮的服务器模型 (one student)
     :param server_data: 服务器上用于蒸馏的数据
     :param kd_epochs: 每个客户端对服务器模型蒸馏的 epoch 次数
     :return: 蒸馏出的服务器模型
@@ -161,16 +161,21 @@ def aggregate(received_models: List[Model], last_global_model: Model, server_dat
     models = []
     for received_model in received_models:
         if received_model.width_factor < 1:
-            distilled_model = kd2p(received_model, 1.0, last_global_model, torch.utils.data.ConcatDataset(server_data), kd_epochs)
+            distilled_model = kd2p(received_model, 1.0, global_model, torch.utils.data.ConcatDataset(server_data), kd_epochs)
             models.append(distilled_model)
         else:
             models.append(received_model)
+
     test_data_loader = torch.utils.data.DataLoader(test_set, batch_size=64, shuffle=False)
     sub_accuracies = [test_model(model.parameters.to('cuda'), test_data_loader) for model in models]
     print('after_kd')
     print(sub_accuracies)
-    new_server_model = fedavg(models)
-    return new_server_model
+
+    global_state_dict = global_model.parameters.state_dict()
+    for key in global_state_dict:
+        global_state_dict[key] = torch.stack([models[i].parameters.state_dict()[key] for i in range(len(models))], dim=0).mean(0)
+    global_model.parameters.load_state_dict(global_state_dict)
+    return global_model
 
 
 def kd2p(model, dest_width_factor, last_model, server_data, kd_epochs):
@@ -185,7 +190,7 @@ def kd2p(model, dest_width_factor, last_model, server_data, kd_epochs):
     """
     dest_model = create_client_model(width_factor=dest_width_factor).parameters
     dest_model.train()
-    criterion = KnowledgeDistillationLossWithRegularization(temperature=1, lambda_reg=0.01)
+    criterion = KnowledgeDistillationLossWithRegularization(temperature=1, lambda_reg=0.1)
     optimizer = torch.optim.Adam(dest_model.parameters(), lr=0.001)
     dataloader = torch.utils.data.DataLoader(server_data, batch_size=64, shuffle=True)
     for epoch in range(kd_epochs):
@@ -199,31 +204,6 @@ def kd2p(model, dest_width_factor, last_model, server_data, kd_epochs):
             loss.backward()
             optimizer.step()
     return Model(width_factor=dest_width_factor, parameters=dest_model)
-
-
-
-def fedavg(models):
-    """
-    对models进行fedavg,需要保证所有models的width_factor一致
-    :param models: 模型列表
-    :return: 聚合后的模型
-    """
-    width_factor = models[0].width_factor
-    models = [model.parameters for model in models]
-    global_params = {name: torch.zeros_like(param.data) for name, param in models[0].named_parameters()}
-    num_models = len(models)
-
-    for model in models:
-        for name, param in model.named_parameters():
-            global_params[name] += param.data
-    averaged_params = {name: param / num_models for name, param in global_params.items()}
-
-    global_model = copy.deepcopy(models[0])  # 假设模型列表中的第一个模型作为基准模型
-    global_model.load_state_dict(averaged_params)
-    return Model(width_factor=width_factor, parameters=global_model)
-
-
-
 
 
 def nicekd(clients, clients_per_round, total_epochs, local_epochs, difference=True):
@@ -278,10 +258,10 @@ def nicekd(clients, clients_per_round, total_epochs, local_epochs, difference=Tr
 if __name__ == '__main__':
     torch.manual_seed(41); random.seed(41); np.random.seed(41)
     cfg = {"dataset": "mnist",
-           "num_clients": 100,
-           "selected_rate": 0.1,
+           "num_clients": 10,
+           "selected_rate": 1,
            "total_epoch": 50,
-           "local_epoch": 3,
+           "local_epoch": 1,
            # difference用于控制每轮通信选择的客户端的种类:
            #    若clients变量包含所有种类的客户端,则应该选为True,保证每轮通信都能选择所有种类的客户端:
            #        因此需要确保clients变量包含所有宽度的客户端,即:
@@ -289,7 +269,7 @@ if __name__ == '__main__':
            #    若clients变量不包含所有种类的客户端,则应该选为False,让每轮通信中都随机选择客户端,但应至少包含一个宽度为1的客户端确保聚合不出现0:
            #        因此需要确保clients变量包含宽度为1的客户端,但可以不包含其他种类的客户端,即:
            #        difference为False: ideal_iid, ideal_dirichlet, exclusive_iid, exclusive_dirichlet, test_small_control
-           "difference": False,
+           "difference": True,
            # split_method控制数据的拆分方法以及客户端的选择:
            #    iid: 将数据随机(iid)分到客户端中,用heterofl处理
            #    dirichlet: 将数据按狄利克雷分布(noniid)分到客户端中,用heterofl处理
@@ -299,7 +279,7 @@ if __name__ == '__main__':
            #    exclusive_dirichlet: 将数据按狄利克雷分布(noniid)分到客户端中,用heterofl处理但等价于FedAvg
            #    test_small_exp: 将数据0-2类分到小客户端,其余分到大客户端,都采用狄利克雷分布(noniid),用heterofl处理`
            #    test_small_control: 将数据0-2类分到小客户端,其余分到大客户端,都采用狄利克雷分布(noniid),随后剔除小客户端,用heterofl处理
-           "split_method": "ideal_iid",
+           "split_method": "iid",
            }
 
     # prepare Net and dataset
@@ -385,6 +365,7 @@ if __name__ == '__main__':
         raise ValueError("Invalid split method type")
     for c in clients:
         print(c)
+
 
     # starting federated learning
     selected_rate, total_epoch, local_epoch, difference = cfg["selected_rate"], cfg["total_epoch"], cfg["local_epoch"], cfg["difference"]
