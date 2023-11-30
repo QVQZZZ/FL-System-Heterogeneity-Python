@@ -10,7 +10,16 @@ from tool import cut_to_size, zeropad_to_size, dirichlet_split_noniid
 from datasets import load_dataset
 from metrics import test_model
 from fl import Factor, Client, Model
+def save_models(received_models, save_path):
+    # 创建文件夹（如果不存在）
+    import os
+    if not os.path.exists(save_path):
+        os.makedirs(save_path)
 
+    # 保存每个接收到的模型
+    for idx, model in enumerate(received_models):
+        model_path = os.path.join(save_path, f"client_model_{idx}.pt")  # 模型保存路径，可根据需要修改文件名
+        torch.save(model.parameters.state_dict(), model_path)
 
 def init_global_model():
     """
@@ -188,25 +197,26 @@ def heterofl(clients, clients_per_round, total_epochs, local_epochs, difference=
                     optimizer.step()
             # backward end
             received_models.append(client_model)
+
+        save_models(received_models, "./testmodels2")
         global_model = aggregate(received_models)
         print(f"Epoch {total_epoch + 1}/{total_epochs} completed")
         test_data_loader = torch.utils.data.DataLoader(test_set, batch_size=64, shuffle=False)
+        # sub_accuracies = [test_model(received_model.parameters.to('cuda'), test_data_loader) for received_model in received_models]
+        # print(sub_accuracies)
         accuracy = test_model(global_model.parameters.to('cuda'), test_data_loader)
         print(f'Accuracy on the test set: {accuracy:.2f}%')
-
-        sub_accuracies = [test_model(received_model.parameters.to('cuda'), test_data_loader) for received_model in received_models]
-        print(sub_accuracies)
     return global_model
 
 
 # In[1]ideal_iid
 if __name__ == '__main__':
-    torch.manual_seed(41); random.seed(41); np.random.seed(41)
-    cfg = {"dataset": "cifar10",
-           "num_clients": 10,
-           "selected_rate": 1,
+    torch.manual_seed(42); random.seed(42); np.random.seed(42)
+    cfg = {"dataset": "mnist",
+           "num_clients": 100,
+           "selected_rate": 0.1,
            "total_epoch": 50,
-           "local_epoch": 3,
+           "local_epoch": 1,
            # difference用于控制每轮通信选择的客户端的种类:
            #    若clients变量包含所有种类的客户端,则应该选为True,保证每轮通信都能选择所有种类的客户端:
            #        因此需要确保clients变量包含所有宽度的客户端,即:
@@ -214,7 +224,7 @@ if __name__ == '__main__':
            #    若clients变量不包含所有种类的客户端,则应该选为False,让每轮通信中都随机选择客户端,但应至少包含一个宽度为1的客户端确保聚合不出现0:
            #        因此需要确保clients变量包含宽度为1的客户端,但可以不包含其他种类的客户端,即:
            #        difference为False: ideal_iid, ideal_dirichlet, exclusive_iid, exclusive_dirichlet, test_small_control
-           "difference": True,
+           "difference": False,
            # split_method控制数据的拆分方法以及客户端的选择:
            #    iid: 将数据随机(iid)分到客户端中,用heterofl处理
            #    dirichlet: 将数据按狄利克雷分布(noniid)分到客户端中,用heterofl处理
@@ -224,7 +234,7 @@ if __name__ == '__main__':
            #    exclusive_dirichlet: 将数据按狄利克雷分布(noniid)分到客户端中,用heterofl处理但等价于FedAvg
            #    test_small_exp: 将数据0-2类分到小客户端,其余分到大客户端,都采用狄利克雷分布(noniid),用heterofl处理
            #    test_small_control: 将数据0-2类分到小客户端,其余分到大客户端,都采用狄利克雷分布(noniid),随后剔除小客户端,用heterofl处理
-           "split_method": "iid",
+           "split_method": "ideal_iid",
            }
 
     # prepare Net and dataset
