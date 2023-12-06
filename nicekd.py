@@ -4,28 +4,13 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torch.utils.data import Subset
-from torch.utils.data import random_split
 import copy
 from typing import List
 
-from tool import cut_to_size, zeropad_to_size, dirichlet_split_noniid
-from datasets import load_dataset
-from metrics import test_model
-from fl import Factor, Client, Model
-
-
-def save_models(received_models, save_path):
-    # 创建文件夹（如果不存在）
-    import os
-    if not os.path.exists(save_path):
-        os.makedirs(save_path)
-
-    # 保存每个接收到的模型
-    for idx, model in enumerate(received_models):
-        model_path = os.path.join(save_path, f"client_model_{idx}.pt")  # 模型保存路径，可根据需要修改文件名
-        torch.save(model.parameters.state_dict(), model_path)
-
-    print(f"Models saved successfully in {save_path}")
+from tool import *
+from datasets import *
+from metrics import *
+from fl import *
 
 
 def init_global_model():
@@ -374,31 +359,26 @@ def nicekd(clients, clients_per_round, total_epochs, local_epochs, difference=Tr
 
 # In[1] ideal_iid
 if __name__ == '__main__':
-    torch.manual_seed(seed := 42); random.seed(seed); np.random.seed(seed)
-    cfg = {"dataset": "cifar10",
-           "num_clients": 100,
-           "selected_rate": 0.1,
-           "total_epoch": 50,
-           "local_epoch": 3,
-           # difference用于控制每轮通信选择的客户端的种类:
-           #    若clients变量包含所有种类的客户端,则应该选为True,保证每轮通信都能选择所有种类的客户端:
-           #        因此需要确保clients变量包含所有宽度的客户端,即:
-           #        difference为True: iid, dirichlet, test_small_exp
-           #    若clients变量不包含所有种类的客户端,则应该选为False,让每轮通信中都随机选择客户端,但应至少包含一个宽度为1的客户端确保聚合不出现0:
-           #        因此需要确保clients变量包含宽度为1的客户端,但可以不包含其他种类的客户端,即:
-           #        difference为False: ideal_iid, ideal_dirichlet, exclusive_iid, exclusive_dirichlet, test_small_control
-           "difference": True,
-           # split_method控制数据的拆分方法以及客户端的选择:
-           #    iid: 将数据随机(iid)分到客户端中,用heterofl处理
-           #    dirichlet: 将数据按狄利克雷分布(noniid)分到客户端中,用heterofl处理
-           #    ideal_iid: 将数据随机(iid)分到客户端中,客户端种类为全1客户端,用heterofl处理但等价于FedAvg
-           #    ideal_dirichlet: 将数据按狄利克雷分布(noniid)分到客户端中,客户端种类为全1客户端,用heterofl处理但等价于FedAvg
-           #    exclusive_iid: 将数据随机(iid)分到客户端中,随后只保留1客户端,用heterofl处理但等价于FedAvg
-           #    exclusive_dirichlet: 将数据按狄利克雷分布(noniid)分到客户端中,用heterofl处理但等价于FedAvg
-           #    test_small_exp: 将数据0-2类分到小客户端,其余分到大客户端,都采用狄利克雷分布(noniid),用heterofl处理`
-           #    test_small_control: 将数据0-2类分到小客户端,其余分到大客户端,都采用狄利克雷分布(noniid),随后剔除小客户端,用heterofl处理
-           "split_method": "dirichlet", #
-           }
+    setup_seed(100)
+    cfg = {
+        "dataset": "mnist",
+        "num_clients": 100,
+        "selected_rate": 0.1,
+        "total_epoch": 50,
+        "local_epoch": 1,
+        "difference": True,
+        "split_method": "iid",
+    }
+    # args = get_arguments()
+    # cfg = {
+    #     "dataset": args.dataset,
+    #     "num_clients": args.num_clients,
+    #     "selected_rate": args.selected_rate,
+    #     "total_epoch": args.total_epoch,
+    #     "local_epoch": args.local_epoch,
+    #     "difference": args.difference,
+    #     "split_method": args.split_method
+    # }
 
     # prepare Net and dataset
     if cfg["dataset"] == "mnist":
@@ -410,80 +390,10 @@ if __name__ == '__main__':
     else:
         raise ValueError("Invalid dataset name")
 
-    num_clients = cfg["num_clients"]
-    client_width_factors = np.random.choice(Factor.width_factors, num_clients)
-    client_width_factors = np.sort(client_width_factors)  # 便于split_method为test_small时划分数据集
-
-    if cfg["split_method"] == "iid":
-        # split data into different clients (iid)
-        client_data = random_split(train_set, [len(train_set) // num_clients] * num_clients)
-        clients = [Client(width_factor=width_factor, data=data) for width_factor, data in zip(client_width_factors, client_data)]
-    elif cfg["split_method"] == "dirichlet":
-        # split data into different clients (dirichlet noniid)
-        client_index = dirichlet_split_noniid(np.array(train_set.targets), alpha=1, n_clients=num_clients)
-        client_data = [Subset(train_set, indices) for indices in client_index]
-        clients = [Client(width_factor=width_factor, data=data) for width_factor, data in zip(client_width_factors, client_data)]
-    elif cfg["split_method"] == "ideal_iid":
-        # 所有客户端都是强客户端, 重新定义client_width_factors为全1客户端
-        client_width_factors = np.random.choice([1], num_clients)
-        client_data = random_split(train_set, [len(train_set) // num_clients] * num_clients)
-        clients = [Client(width_factor=width_factor, data=data) for width_factor, data in zip(client_width_factors, client_data)]
-    elif cfg["split_method"] == "ideal_dirichlet":
-        # 所有客户端都是强客户端, 重新定义client_width_factors为全1客户端
-        client_width_factors = np.random.choice([1], num_clients)
-        client_index = dirichlet_split_noniid(np.array(train_set.targets), alpha=1, n_clients=num_clients)
-        client_data = [Subset(train_set, indices) for indices in client_index]
-        clients = [Client(width_factor=width_factor, data=data) for width_factor, data in zip(client_width_factors, client_data)]
-    elif cfg["split_method"] == "exclusive_iid":
-        # split data into different clients (iid)
-        # 随后只保留最大的客户端
-        client_data = random_split(train_set, [len(train_set) // num_clients] * num_clients)
-        clients = [Client(width_factor=width_factor, data=data) for width_factor, data in zip(client_width_factors, client_data)]
-        clients = [_ for _ in clients if _.width_factor == max(Factor.width_factors)]
-    elif cfg["split_method"] == "exclusive_dirichlet":
-        # split data into different clients (dirichlet noniid)
-        # 随后只保留最大的客户端
-        client_index = dirichlet_split_noniid(np.array(train_set.targets), alpha=1, n_clients=num_clients)
-        client_data = [Subset(train_set, indices) for indices in client_index]
-        clients = [Client(width_factor=width_factor, data=data) for width_factor, data in zip(client_width_factors, client_data)]
-        clients = [_ for _ in clients if _.width_factor == max(Factor.width_factors)]
-    elif cfg["split_method"] == "test_small_exp":
-        # split data into different clients (test small model)
-        # 将0,1,2的样本dirichlet划分到小客户端上, 将剩余的样本dirichlet划分到其他客户端上
-        small_client = np.where(client_width_factors == min(client_width_factors))[0]
-        other_client = np.where(client_width_factors != min(client_width_factors))[0]
-        dataset_part1 = Subset(train_set, [i for i in range(len(train_set)) if train_set.targets[i] in [0, 1, 2]])
-        dataset_part2 = Subset(train_set, [i for i in range(len(train_set)) if train_set.targets[i] not in [0, 1, 2]])
-        dataset_part1_targets = [train_set[i][1] for i in dataset_part1.indices]  # Subset对象没有targets属性, 需要手动创建
-        dataset_part2_targets = [train_set[i][1] for i in dataset_part2.indices]  # Subset对象没有targets属性, 需要手动创建
-        small_client_index = dirichlet_split_noniid(np.array(dataset_part1_targets), alpha=1, n_clients=len(small_client), subset_indices=np.array(dataset_part1.indices))
-        small_client_data = [Subset(train_set, indices) for indices in small_client_index]
-        other_client_index = dirichlet_split_noniid(np.array(dataset_part2_targets), alpha=1, n_clients=len(other_client), subset_indices=np.array(dataset_part2.indices))
-        other_client_data = [Subset(train_set, indices) for indices in other_client_index]
-        client_data = small_client_data + other_client_data
-        clients = [Client(width_factor=width_factor, data=data) for width_factor, data in zip(client_width_factors, client_data)]
-    elif cfg["split_method"] == "test_small_control":
-        # split data into different clients (test small model)
-        # 将0,1,2的样本dirichlet划分到小客户端上, 将剩余的样本dirichlet划分到其他客户端上
-        # 随后去掉small客户端
-        small_client = np.where(client_width_factors == min(client_width_factors))[0]
-        other_client = np.where(client_width_factors != min(client_width_factors))[0]
-        dataset_part1 = Subset(train_set, [i for i in range(len(train_set)) if train_set.targets[i] in [0, 1, 2]])
-        dataset_part2 = Subset(train_set, [i for i in range(len(train_set)) if train_set.targets[i] not in [0, 1, 2]])
-        dataset_part1_targets = [train_set[i][1] for i in dataset_part1.indices]  # Subset对象没有targets属性, 需要手动创建
-        dataset_part2_targets = [train_set[i][1] for i in dataset_part2.indices]  # Subset对象没有targets属性, 需要手动创建
-        small_client_index = dirichlet_split_noniid(np.array(dataset_part1_targets), alpha=1, n_clients=len(small_client), subset_indices=np.array(dataset_part1.indices))
-        small_client_data = [Subset(train_set, indices) for indices in small_client_index]
-        other_client_index = dirichlet_split_noniid(np.array(dataset_part2_targets), alpha=1, n_clients=len(other_client), subset_indices=np.array(dataset_part2.indices))
-        other_client_data = [Subset(train_set, indices) for indices in other_client_index]
-        client_data = small_client_data + other_client_data
-        clients = [Client(width_factor=width_factor, data=data) for width_factor, data in zip(client_width_factors, client_data)]
-        clients = [_ for _ in clients if _.width_factor != min(Factor.width_factors)]
-    else:
-        raise ValueError("Invalid split method type")
+    clients = create_clients(cfg, train_set)
 
     # starting federated learning
-    selected_rate, total_epoch, local_epoch, difference = cfg["selected_rate"], cfg["total_epoch"], cfg["local_epoch"], cfg["difference"]
+    num_clients, selected_rate, total_epoch, local_epoch, difference = cfg['num_clients'], cfg["selected_rate"], cfg["total_epoch"], cfg["local_epoch"], cfg["difference"]
     final_global_model = nicekd(clients=clients, clients_per_round=int(selected_rate * num_clients), total_epochs=total_epoch, local_epochs=local_epoch, difference=difference)
 
     # test final_global_model

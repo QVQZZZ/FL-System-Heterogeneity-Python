@@ -4,12 +4,11 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torch.utils.data import Subset
-from torch.utils.data import random_split
 
-from tool import cut_to_size, zeropad_to_size, dirichlet_split_noniid
-from datasets import load_dataset
-from metrics import test_model
-from fl import Factor, Client, Model
+from tool import *
+from datasets import *
+from metrics import *
+from fl import *
 
 
 def init_global_model():
@@ -56,16 +55,16 @@ def random_choice(clients, clients_per_round, difference=True):
     if difference:
         # 若为True,则保证选出的客户端包含所有宽度的客户端
         while True:
-            random.shuffle(clients)
-            selected_clients = clients[:clients_per_round]
+            shuffled_clients = random.sample(clients, len(clients))
+            selected_clients = shuffled_clients[:clients_per_round]
             clients_type = set([client.width_factor for client in selected_clients])
             if len(clients_type) == len(Factor.width_factors):
                 return selected_clients
     else:
         # 若为False,也至少要保证选出的客户端中包含一个宽度为1的客户端,避免聚合时出现大量的0
         while True:
-            random.shuffle(clients)
-            selected_clients = clients[:clients_per_round]
+            shuffled_clients = random.sample(clients, len(clients))
+            selected_clients = shuffled_clients[:clients_per_round]
             for selected_client in selected_clients:
                 if selected_client.width_factor == 1:
                     return selected_clients
@@ -189,7 +188,7 @@ def fjord(clients, clients_per_round, total_epochs, local_epochs, difference=Tru
                     loss = criterion(predictions, batch_labels)
                     loss.backward()
                     optimizer.step()
-            received_models.append(teacher_model) # TODO: DELETE
+            received_models.append(teacher_model)
             # 再训练每个student(采用KD)
             for student_model in student_models:
                 student_model = get_parameters_from_server(student_model, global_model)
@@ -209,7 +208,6 @@ def fjord(clients, clients_per_round, total_epochs, local_epochs, difference=Tru
                         temperature = 1; alpha = 0.5
                         kd_loss = kd_criterion(torch.log_softmax(predictions_student / temperature, dim=1),
                                                torch.softmax(predictions_teacher / temperature, dim=1))
-                        print(kd_loss)
                         loss = (1 - alpha) * student_loss + alpha * kd_loss
                         loss.backward()
                         optimizer.step()
@@ -224,25 +222,26 @@ def fjord(clients, clients_per_round, total_epochs, local_epochs, difference=Tru
 
 
 if __name__ == '__main__':
-    torch.manual_seed(42); random.seed(42); np.random.seed(42)
-    cfg = {"dataset": "mnist",
-           "num_clients": 100,
-           "selected_rate": 0.1,
-           "total_epoch": 50,
-           "local_epoch": 1,
-           # difference用于控制每轮通信选择的客户端的种类:
-           #    若clients变量包含所有种类的客户端,则应该选为True,保证每轮通信都能选择所有种类的客户端:
-           #        因此需要确保clients变量包含所有宽度的客户端,即:
-           #        difference为True: iid, dirichlet
-           #    若clients变量不包含所有种类的客户端,则应该选为False,让每轮通信中都随机选择客户端,但应至少包含一个宽度为1的客户端确保聚合不出现0:
-           #        因此需要确保clients变量包含宽度为1的客户端,但可以不包含其他种类的客户端,即:
-           #        difference为False:
-           "difference": True,
-           # split_method控制数据的拆分方法以及客户端的选择:
-           #    iid: 将数据随机(iid)分到客户端中,用heterofl处理
-           #    dirichlet: 将数据按狄利克雷分布(noniid)分到客户端中,用heterofl处理
-           "split_method": "iid",
-           }
+    setup_seed(100)
+    cfg = {
+        "dataset": "mnist",
+        "num_clients": 100,
+        "selected_rate": 0.1,
+        "total_epoch": 50,
+        "local_epoch": 1,
+        "difference": True,
+        "split_method": "iid",
+    }
+    # args = get_arguments()
+    # cfg = {
+    #     "dataset": args.dataset,
+    #     "num_clients": args.num_clients,
+    #     "selected_rate": args.selected_rate,
+    #     "total_epoch": args.total_epoch,
+    #     "local_epoch": args.local_epoch,
+    #     "difference": args.difference,
+    #     "split_method": args.split_method
+    # }
 
     # prepare Net and dataset
     if cfg["dataset"] == "mnist":
@@ -254,26 +253,11 @@ if __name__ == '__main__':
     else:
         raise ValueError("Invalid dataset name")
 
-    num_clients = cfg["num_clients"]
-    client_width_factors = np.random.choice(Factor.width_factors, num_clients)
-    client_width_factors = np.sort(client_width_factors)  # 便于split_method为test_small时划分数据集
-
-    if cfg["split_method"] == "iid":
-        # split data into different clients (iid)
-        client_data = random_split(train_set, [len(train_set) // num_clients] * num_clients)
-        clients = [Client(width_factor=width_factor, data=data) for width_factor, data in zip(client_width_factors, client_data)]
-    elif cfg["split_method"] == "dirichlet":
-        # split data into different clients (dirichlet noniid)
-        client_index = dirichlet_split_noniid(np.array(train_set.targets), alpha=1, n_clients=num_clients)
-        client_data = [Subset(train_set, indices) for indices in client_index]
-        clients = [Client(width_factor=width_factor, data=data) for width_factor, data in zip(client_width_factors, client_data)]
-    else:
-        raise ValueError("Invalid split method type")
+    clients = create_clients(cfg, train_set)
 
     # starting federated learning
-    selected_rate, total_epoch, local_epoch, difference = cfg["selected_rate"], cfg["total_epoch"], cfg["local_epoch"], cfg["difference"]
-    final_global_model = fjord(clients=clients, clients_per_round=int(selected_rate*num_clients),
-                               total_epochs=total_epoch, local_epochs=local_epoch, difference=difference)
+    num_clients, selected_rate, total_epoch, local_epoch, difference = cfg['num_clients'], cfg["selected_rate"], cfg["total_epoch"], cfg["local_epoch"], cfg["difference"]
+    final_global_model = fjord(clients=clients, clients_per_round=int(selected_rate*num_clients), total_epochs=total_epoch, local_epochs=local_epoch, difference=difference)
 
     # test final_global_model
     test_data_loader = torch.utils.data.DataLoader(test_set, batch_size=64, shuffle=False)
