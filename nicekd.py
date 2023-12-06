@@ -13,6 +13,7 @@ from datasets import load_dataset
 from metrics import test_model
 from fl import Factor, Client, Model
 
+
 def save_models(received_models, save_path):
     # 创建文件夹（如果不存在）
     import os
@@ -25,6 +26,8 @@ def save_models(received_models, save_path):
         torch.save(model.parameters.state_dict(), model_path)
 
     print(f"Models saved successfully in {save_path}")
+
+
 def init_global_model():
     """
     初始化width_factor=1的全局模型
@@ -171,10 +174,20 @@ def aggregate(received_models: List[Model], global_model: Model, server_data: Li
     :param kd_epochs: 每个客户端对服务器模型蒸馏的 epoch 次数
     :return: 蒸馏出的服务器模型
     """
+    # 创建p=1模型的平均作为正则化目标模型
+    temp_state_dict = global_model.parameters.state_dict()
+    pmax_models = [_ for _ in received_models if _.width_factor == max(Factor.width_factors)]
+    for key in temp_state_dict:
+        temp_state_dict[key] = torch.stack([pmax_models[i].parameters.state_dict()[key] for i in range(len(pmax_models))], dim=0).mean(0)
+    temp_model = init_global_model()
+    temp_model.parameters.load_state_dict(temp_state_dict)
+    # 创建完成，若需要以该模型为目标，则kd2p的第三个参数从global_model改为temp_model
+
+
     models = []
     for received_model in received_models:
         if received_model.width_factor < 1:
-            distilled_model = kd2p(received_model, 1.0, global_model, torch.utils.data.ConcatDataset(server_data), kd_epochs, temperature=1, lambda_reg=0.1)
+            distilled_model = kd2p(received_model, 1.0, temp_model, torch.utils.data.ConcatDataset(server_data), kd_epochs, temperature=1, lambda_reg=0.1)
             models.append(distilled_model)
         else:
             models.append(received_model)
@@ -205,11 +218,11 @@ def kd2p(model, dest_width_factor, last_model, server_data, kd_epochs, temperatu
     :param lambda_reg: 正则化强度
     :return: 蒸馏后的模型
     """
-    print("kd2p被调用")
+    # print(f'kd2p被调用,源{model.width_factor},目的{dest_width_factor}')
     dest_model = create_client_model(width_factor=dest_width_factor).parameters
     dest_model.train()
     criterion = KnowledgeDistillationLossWithRegularization(temperature=temperature, lambda_reg=lambda_reg)
-    optimizer = torch.optim.Adam(dest_model.parameters(), lr=0.001)
+    optimizer = torch.optim.Adam(dest_model.parameters())
     dataloader = torch.utils.data.DataLoader(server_data, batch_size=64, shuffle=True)
     for epoch in range(kd_epochs):
         for inputs, labels in dataloader:
@@ -239,11 +252,40 @@ def nicekd(clients, clients_per_round, total_epochs, local_epochs, difference=Tr
         server_data.append(new_subset)
     # end create server data
 
+    # 小小训练以下 global_model，避免冷启动问题
+    client_data_loader = torch.utils.data.DataLoader(clients[0].data, batch_size=64, shuffle=True)
+    optimizer = torch.optim.Adam(global_model.parameters.parameters())
+    criterion = torch.nn.CrossEntropyLoss()
+    for local_epoch in range(1):
+        for batch_data, batch_labels in client_data_loader:
+            global_model.parameters.train()  # train mode
+            batch_data, batch_labels = batch_data.to('cuda'), batch_labels.to('cuda')
+            optimizer.zero_grad()
+            predictions = global_model.parameters(batch_data)
+            loss = criterion(predictions, batch_labels)
+            loss.backward()
+            optimizer.step()
+    print('here')
+    test_data_loader = torch.utils.data.DataLoader(test_set, batch_size=64, shuffle=False)
+    print(test_model(global_model.parameters.to('cuda'), test_data_loader))
+
+
     for total_epoch in range(total_epochs):
         clients_selected, idx = random_choice(clients, clients_per_round, difference=difference)
         models_selected = [client_models[i] for i in idx]
 
-        models_selected = distribute(global_model, models_selected, server_data, 3)
+        # print('before distribute')
+        # test_data_loader = torch.utils.data.DataLoader(test_set, batch_size=64, shuffle=False)
+        # sub_accuracies = [test_model(received_model.parameters.to('cuda'), test_data_loader) for received_model in models_selected]
+        # print(sub_accuracies)
+
+        models_selected = distribute(global_model, models_selected, server_data, 5)
+
+        # print('after distribute')
+        # test_data_loader = torch.utils.data.DataLoader(test_set, batch_size=64, shuffle=False)
+        # sub_accuracies = [test_model(received_model.parameters.to('cuda'), test_data_loader) for received_model in models_selected]
+        # print(sub_accuracies)
+
         for m, i in zip(models_selected, idx):
             client_models[i] = m
 
@@ -251,7 +293,7 @@ def nicekd(clients, clients_per_round, total_epochs, local_epochs, difference=Tr
         for client, client_model in zip(clients_selected, models_selected):
             # backward start
             client_data_loader = torch.utils.data.DataLoader(client.data, batch_size=64, shuffle=True)
-            optimizer = torch.optim.Adam(client_model.parameters.parameters(), lr=0.001)
+            optimizer = torch.optim.Adam(client_model.parameters.parameters())
             criterion = torch.nn.CrossEntropyLoss()
             for local_epoch in range(local_epochs):
                 for batch_data, batch_labels in client_data_loader:
@@ -264,7 +306,7 @@ def nicekd(clients, clients_per_round, total_epochs, local_epochs, difference=Tr
                     optimizer.step()
             # backward end
             received_models.append(client_model)
-        global_model = aggregate(received_models, global_model, server_data, 3)
+        global_model = aggregate(received_models, global_model, server_data, 5)
 
         print(f"Epoch {total_epoch + 1}/{total_epochs} completed")
         test_data_loader = torch.utils.data.DataLoader(test_set, batch_size=64, shuffle=False)
@@ -332,12 +374,12 @@ def nicekd(clients, clients_per_round, total_epochs, local_epochs, difference=Tr
 
 # In[1] ideal_iid
 if __name__ == '__main__':
-    torch.manual_seed(42); random.seed(42); np.random.seed(42)
-    cfg = {"dataset": "mnist",
+    torch.manual_seed(seed := 42); random.seed(seed); np.random.seed(seed)
+    cfg = {"dataset": "cifar10",
            "num_clients": 100,
            "selected_rate": 0.1,
            "total_epoch": 50,
-           "local_epoch": 1,
+           "local_epoch": 3,
            # difference用于控制每轮通信选择的客户端的种类:
            #    若clients变量包含所有种类的客户端,则应该选为True,保证每轮通信都能选择所有种类的客户端:
            #        因此需要确保clients变量包含所有宽度的客户端,即:
@@ -345,7 +387,7 @@ if __name__ == '__main__':
            #    若clients变量不包含所有种类的客户端,则应该选为False,让每轮通信中都随机选择客户端,但应至少包含一个宽度为1的客户端确保聚合不出现0:
            #        因此需要确保clients变量包含宽度为1的客户端,但可以不包含其他种类的客户端,即:
            #        difference为False: ideal_iid, ideal_dirichlet, exclusive_iid, exclusive_dirichlet, test_small_control
-           "difference": False,
+           "difference": True,
            # split_method控制数据的拆分方法以及客户端的选择:
            #    iid: 将数据随机(iid)分到客户端中,用heterofl处理
            #    dirichlet: 将数据按狄利克雷分布(noniid)分到客户端中,用heterofl处理
@@ -355,7 +397,7 @@ if __name__ == '__main__':
            #    exclusive_dirichlet: 将数据按狄利克雷分布(noniid)分到客户端中,用heterofl处理但等价于FedAvg
            #    test_small_exp: 将数据0-2类分到小客户端,其余分到大客户端,都采用狄利克雷分布(noniid),用heterofl处理`
            #    test_small_control: 将数据0-2类分到小客户端,其余分到大客户端,都采用狄利克雷分布(noniid),随后剔除小客户端,用heterofl处理
-           "split_method": "ideal_iid",
+           "split_method": "dirichlet",
            }
 
     # prepare Net and dataset
@@ -449,3 +491,15 @@ if __name__ == '__main__':
     accuracy = test_model(final_global_model.parameters.to('cuda'), test_data_loader)
     print('Training completed')
     print(f'Accuracy on the test set: {accuracy:.2f}%')
+
+    # test small_model
+    server_data = []
+    for subset in [client.data for client in clients]:
+        subset_length = len(subset)
+        one_tenth = subset_length // 10
+        new_indices = subset.indices[:one_tenth]
+        new_subset = Subset(subset.dataset, new_indices)
+        server_data.append(new_subset)
+    client_models = [create_client_model(width_factor) for width_factor in Factor.width_factors]
+    client_models = distribute(final_global_model, client_models, server_data, 5)
+    print([test_model(model.parameters.to('cuda'), test_data_loader) for model in client_models])
