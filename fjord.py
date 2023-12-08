@@ -222,7 +222,7 @@ def fjord(clients, clients_per_round, total_epochs, local_epochs, difference=Tru
 
 
 if __name__ == '__main__':
-    setup_seed(100)
+    setup_seed(42)
     cfg = {
         "dataset": "mnist",
         "num_clients": 100,

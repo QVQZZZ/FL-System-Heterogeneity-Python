@@ -14,7 +14,7 @@ difference: false
   #        difference为True: iid, dirichlet, test_small_exp
   #    若clients变量不包含所有种类的客户端,则应该选为False,让每轮通信中都随机选择客户端,但应至少包含一个宽度为1的客户端确保聚合不出现0:
   #        因此需要确保clients变量包含宽度为1的客户端,但可以不包含其他种类的客户端,即:
-  #        difference为False: ideal_iid, ideal_dirichlet, exclusive_iid, exclusive_dirichlet, test_small_control
+  #        difference为False: ideal_iid, ideal_dirichlet, exclusive_iid, exclusive_dirichlet, test_exclusive, test_small_control
 split_method: iid
   # split_method控制数据的拆分方法以及客户端的选择:(一般来说,除了在heterofl.py中需要baseline的分割方法,其他地方只需要选择'iid'和'dirichlet')
   #    iid: 将数据随机(iid)分到客户端中
@@ -23,5 +23,8 @@ split_method: iid
   #    ideal_dirichlet: 将数据按狄利克雷分布(noniid)分到客户端中,客户端种类为全1客户端,用heterofl处理但等价于FedAvg (baseline,理想情况下的FedAvg)
   #    exclusive_iid: 将数据随机(iid)分到客户端中,随后只保留1客户端,用heterofl处理但等价于FedAvg (baseline,排除弱客户端)
   #    exclusive_dirichlet: 将数据按狄利克雷分布(noniid)分到客户端中,用heterofl处理但等价于FedAvg (baseline,排除弱客户端)
+  #    test_exclusive: 将数据0-5类划分到其他客户端上,6-9划分到大客户端,都采用狄利克雷分布(noniid),用heterofl处理但等价于FedAvg (测试特殊情况下exclusive的不可行性)
   #    test_small_exp: 将数据0-2类分到小客户端,其余分到大客户端,都采用狄利克雷分布(noniid),用heterofl处理 (测试小模型性能实验的实验组)
   #    test_small_control: 将数据0-2类分到小客户端,其余分到大客户端,都采用狄利克雷分布(noniid),随后剔除小客户端,用heterofl处理 (测试小模型性能实验的对照组)
+
+# PS: all_small baseline由于无法集成到heterofl中, 因此单独开一个脚本进行实现

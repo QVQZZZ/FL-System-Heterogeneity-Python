@@ -13,5 +13,5 @@ def get_arguments():
     parser.add_argument('--total_epoch', type=int, default=50, help='Total number of training epochs')
     parser.add_argument('--local_epoch', type=int, default=1, help='Number of local training epochs at each client')
     parser.add_argument('--difference', type=bool, default=False, help='Control client selection: True for selecting all types, False for random selection')
-    parser.add_argument('--split_method', choices=['iid', 'dirichlet', 'ideal_iid', 'ideal_dirichlet', 'exclusive_iid', 'exclusive_dirichlet', 'test_small_exp', 'test_small_control'], default='iid', help='Control data splitting and client selection methods')
+    parser.add_argument('--split_method', choices=['iid', 'dirichlet', 'ideal_iid', 'ideal_dirichlet', 'exclusive_iid', 'exclusive_dirichlet', 'test_exclusive', 'test_small_exp', 'test_small_control'], default='iid', help='Control data splitting and client selection methods')
     return parser.parse_args()

@@ -187,8 +187,6 @@ def heterofl(clients, clients_per_round, total_epochs, local_epochs, difference=
                     optimizer.step()
             # backward end
             received_models.append(client_model)
-
-        save_models(received_models, "./testmodels2")
         global_model = aggregate(received_models)
         print(f"Epoch {total_epoch + 1}/{total_epochs} completed")
         test_data_loader = torch.utils.data.DataLoader(test_set, batch_size=64, shuffle=False)
@@ -201,15 +199,15 @@ def heterofl(clients, clients_per_round, total_epochs, local_epochs, difference=
 
 # In[1] ideal_iid
 if __name__ == '__main__':
-    setup_seed(100)
+    setup_seed(42)
     cfg = {
         "dataset": "mnist",
         "num_clients": 100,
         "selected_rate": 0.1,
         "total_epoch": 50,
         "local_epoch": 1,
-        "difference": True,
-        "split_method": "iid",
+        "difference": False,
+        "split_method": "test_exclusive",
     }
     # args = get_arguments()
     # cfg = {
